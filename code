@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Linkum Auto Task Taker + UI Control
+// @name         Linkum Auto Task Taker (Persistent Loop)
 // @namespace    https://yourdomain.local/
-// @version      1.1
-// @description  Автоматически берет задания на Linkum.ru с кнопкой Старт/Стоп
+// @version      1.4
+// @description  Постоянный цикл: берет задания и обновляет страницу каждую секунду, пока не нажата "Остановить" (сохранение состояния между перезагрузками)
 // @author       Ты
 // @match        https://linkum.ru/user/crowd/*
 // @icon         https://linkum.ru/favicon.ico
@@ -13,15 +13,22 @@
 (function () {
   'use strict';
 
-  // 🔒 Защита от модальных окон
+  // 🔒 Защита от всплывающих окон
   window.alert = () => {};
   window.confirm = () => true;
   window.prompt = () => '';
 
   const MIN_ORDER_ID = 2555605;
-  const MAX_TASKS_PER_CYCLE = 10;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  let running = false;
+
+  // 🧠 Флаг запуска хранится в localStorage
+  const STORAGE_KEY = 'linkum_auto_task_running';
+  let running = localStorage.getItem(STORAGE_KEY) === 'true';
+
+  const setRunning = (value) => {
+    running = value;
+    localStorage.setItem(STORAGE_KEY, value ? 'true' : 'false');
+  };
 
   const getTasksToTake = () => {
     return [...document.querySelectorAll("#orders tr")].map(row => {
@@ -32,57 +39,51 @@
     }).filter(Boolean);
   };
 
-  const takeTask = async ({ orderId, button }) => {
-    try {
-      button.click();
-      console.log(`[✔] Открытие задания ${orderId}`);
-      await sleep(1500);
+  const takeAllTasks = async () => {
+    const tasks = getTasksToTake();
+    if (tasks.length === 0) {
+      console.log('[⏳] Нет подходящих заданий...');
+      return;
+    }
 
-      for (let i = 0; i < 10; i++) {
-        const confirmButton = document.querySelector("#post_type");
-        if (confirmButton) {
-          confirmButton.click();
-          console.log(`[🚀] Задание ${orderId} взято в работу`);
-          return;
+    for (const { orderId, button } of tasks) {
+      if (!running) return;
+      try {
+        button.click();
+        console.log(`[✔] Открытие задания ${orderId}`);
+        await sleep(1000);
+
+        for (let i = 0; i < 10; i++) {
+          const confirmButton = document.querySelector("#post_type");
+          if (confirmButton) {
+            confirmButton.click();
+            console.log(`[🚀] Задание ${orderId} взято`);
+            break;
+          }
+          await sleep(300);
         }
-        await sleep(500);
+      } catch (err) {
+        console.error(`[❌] Ошибка при задании ${orderId}:`, err);
       }
-
-      console.warn(`[⚠] Кнопка "Взять в работу" не найдена для ${orderId}`);
-    } catch (err) {
-      console.error(`[❌] Ошибка при обработке задания ${orderId}:`, err);
+      await sleep(1000);
     }
   };
 
-  const processLoop = async () => {
+  const startLoop = async () => {
     while (running) {
-      const tasks = getTasksToTake();
-
-      if (tasks.length === 0) {
-        console.log('[⏳] Нет подходящих заданий. Ждем 10 секунд...');
-        await sleep(10000);
-        if (!running) return;
-        location.reload();
-        return;
-      }
-
-      for (const task of tasks.slice(0, MAX_TASKS_PER_CYCLE)) {
-        if (!running) return;
-        await takeTask(task);
-        await sleep(2000);
-      }
-
-      console.log('[🔄] Цикл завершен. Обновление через 3 секунды...');
-      await sleep(3000);
+      await takeAllTasks();
       if (!running) return;
-      location.reload();
+      console.log('[🔄] Обновление через 1 секунду...');
+      await sleep(1000);
+      if (!running) return;
+      location.reload(); // обновляем страницу — и продолжаем
     }
   };
 
   const createToggleButton = () => {
     const btn = document.createElement('button');
     btn.id = 'linkum-autotake-toggle';
-    btn.textContent = '▶️ Запустить';
+    btn.textContent = running ? '⏹ Остановить' : '▶️ Запустить';
     btn.style.cssText = `
       position: fixed;
       bottom: 20px;
@@ -97,13 +98,13 @@
       box-shadow: 0 2px 6px rgba(0,0,0,0.3);
     `;
     btn.onclick = () => {
-      running = !running;
+      setRunning(!running);
       btn.textContent = running ? '⏹ Остановить' : '▶️ Запустить';
       if (running) {
-        console.log('[▶️] Запуск подбора заданий...');
-        processLoop();
+        console.log('[▶️] Скрипт запущен, работает бесконечно...');
+        startLoop();
       } else {
-        console.log('[⏹] Подбор остановлен.');
+        console.log('[⏹] Скрипт остановлен.');
       }
     };
     document.body.appendChild(btn);
@@ -111,5 +112,9 @@
 
   window.addEventListener('load', () => {
     createToggleButton();
+    if (running) {
+      console.log('[⚡] Продолжаем работу после перезагрузки...');
+      startLoop();
+    }
   });
 })();
